@@ -25,6 +25,9 @@ CHANNEL = "X_Change_Vinnitsa"
 CHANNEL_URL = f"https://t.me/{CHANNEL}"
 CHANNEL_PREVIEW_URL = f"https://t.me/s/{CHANNEL}"
 
+# Минимальная разница для сигнала
+TRAVEL_THRESHOLD = 0.20
+
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -52,6 +55,7 @@ def telegram_send(message):
         json={
             "chat_id": CHAT_ID,
             "text": message[:4000],
+            "parse_mode": "HTML",
             "disable_web_page_preview": True,
         },
         timeout=30
@@ -557,14 +561,17 @@ def format_comparison(
             ""
         ])
 
-    lines.extend([
-        "ИСТОЧНИКИ:",
-        "Raiffeisen: Finance.ua",
-        f"X-Change: {post['url']}",
-        "",
-        "Время публикации X-Change: "
-        f"{post['date'] or 'не указано'}"
-    ])
+    # Сигнал при разнице от +20 копеек.
+
+    if any(
+        difference >= TRAVEL_THRESHOLD
+        for difference in spreads.values()
+    ):
+
+        lines.extend([
+            "",
+            "<b>🔥 ЮРА ПОРА ЕХАТЬ!</b>"
+        ])
 
     return "\n".join(lines)
 
@@ -577,9 +584,11 @@ def main():
 
     state = load_state()
 
-    # Получаем курсы.
+    # Получаем курсы Raiffeisen.
 
     raif = fetch_raif_rates()
+
+    # Получаем курсы X-Change.
 
     xchange_data = fetch_xchange_rates()
 
@@ -596,7 +605,7 @@ def main():
     print("X-CHANGE:", xchange)
     print("РАЗНИЦА:", spreads)
 
-    # Сравниваем с предыдущими значениями.
+    # Проверяем изменение разницы.
 
     previous_spreads = state.get("spreads")
 
@@ -607,7 +616,7 @@ def main():
 
     changed = spreads != previous_spreads
 
-    # Отправляем сообщение.
+    # Отправляем уведомление.
 
     if first_run or changed:
 
