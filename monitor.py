@@ -3,7 +3,6 @@ import os
 import re
 import sys
 from pathlib import Path
-from datetime import datetime
 
 import requests
 from bs4 import BeautifulSoup
@@ -13,10 +12,7 @@ STATE_FILE = Path("state.json")
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 CHAT_ID = os.environ["CHAT_ID"]
 
-FINANCE_URL = (
-    "https://finance.ua/ua/banks/"
-    "raiffeisen-bank-aval/currency"
-)
+FINANCE_URL = "https://finance.ua/ua/banks/raiffeisen-bank-aval/currency"
 
 CHANNEL = "X_Change_Vinnitsa"
 CHANNEL_URL = f"https://t.me/{CHANNEL}"
@@ -48,7 +44,7 @@ def telegram_send(message):
     data = response.json()
 
     if not data.get("ok"):
-        raise RuntimeError(f"Telegram error: {data}")
+        raise RuntimeError(f"Telegram API error: {data}")
 
     return data
 
@@ -80,11 +76,13 @@ def to_float(value):
     return float(value.replace(",", "."))
 
 
-# ---------------------------------
+# =================================
 # RAIFFEISEN — FINANCE.UA
-# ---------------------------------
+# =================================
 
 def fetch_raif_rates():
+
+    print("Открываю Finance.ua...")
 
     response = requests.get(
         FINANCE_URL,
@@ -105,48 +103,52 @@ def fetch_raif_rates():
         soup.get_text(" ", strip=True)
     )
 
-    start = text.find(
-        "Курс валют в Райффайзен Банку"
+    print("Страница Finance.ua получена.")
+
+    start = re.search(
+        r"Курс валют в Райффайзен Банку|"
+        r"Курс валют в Райффайзен Банке",
+        text,
+        flags=re.IGNORECASE
     )
 
-    if start == -1:
-        start = text.find(
-            "Курс валют в Райффайзен Банке"
-        )
-
-    if start == -1:
+    if not start:
         raise RuntimeError(
-            "Не найден блок курсов Raiffeisen на Finance.ua"
+            "Не найден заголовок курсов Raiffeisen. "
+            "Возможно, изменилась структура Finance.ua."
         )
 
-    end = text.find(
-        "Карткові курси",
-        start
+    remaining = text[start.end():]
+
+    end = re.search(
+        r"Карткові курси|Карточные курсы",
+        remaining,
+        flags=re.IGNORECASE
     )
 
-    if end == -1:
-        end = text.find(
-            "Карточные курсы",
-            start
-        )
-
-    if end == -1:
+    if not end:
         raise RuntimeError(
-            "Не удалось определить границу наличных курсов"
+            "Не удалось определить границу наличных курсов."
         )
 
-    cash_text = text[start:end]
+    cash_text = remaining[:end.start()]
+
+    print("Найден блок наличных курсов.")
 
     rates = {}
+
+    number = (
+        r"(\d{1,3}[,.]\d{2})"
+        r"(?:\s*[+-]?\s*\d+[,.]\d{4})?"
+    )
 
     for currency in ("USD", "EUR"):
 
         pattern = (
             rf"\b{currency}\b\s+"
-            r"(\d{1,3}[,.]\d{2})"
-            r"(?:\s*[+-]?\s*\d+[,.]\d{4})?"
-            r"\s+"
-            r"(\d{1,3}[,.]\d{2})"
+            + number
+            + r"\s+"
+            + number
         )
 
         match = re.search(
@@ -156,8 +158,16 @@ def fetch_raif_rates():
         )
 
         if not match:
+
+            print(
+                f"Не найден {currency}. "
+                "Фрагмент наличного блока:",
+                cash_text[:2500],
+                file=sys.stderr
+            )
+
             raise RuntimeError(
-                f"Не найден наличный курс {currency} Raiffeisen"
+                f"Не найден наличный курс {currency} Raiffeisen."
             )
 
         rates[currency] = {
@@ -168,11 +178,13 @@ def fetch_raif_rates():
     return rates
 
 
-# ---------------------------------
+# =================================
 # X-CHANGE — TELEGRAM
-# ---------------------------------
+# =================================
 
 def fetch_channel_posts():
+
+    print("Открываю Telegram-канал X-Change...")
 
     response = requests.get(
         CHANNEL_PREVIEW_URL,
@@ -241,6 +253,11 @@ def fetch_channel_posts():
             "url": f"{CHANNEL_URL}/{post_id}"
         })
 
+    if not posts:
+        raise RuntimeError(
+            "Telegram не вернул публикации X-Change."
+        )
+
     return sorted(
         posts,
         key=lambda item: item["id"],
@@ -293,6 +310,11 @@ def fetch_xchange_rates():
 
         if rates:
 
+            print(
+                "Найдена публикация X-Change:",
+                post["url"]
+            )
+
             return {
                 "rates": rates,
                 "post_id": post["id"],
@@ -302,13 +324,13 @@ def fetch_xchange_rates():
 
     raise RuntimeError(
         "Не найдена публикация X-Change "
-        "с полными курсами USD и EUR"
+        "с курсами USD и EUR."
     )
 
 
-# ---------------------------------
-# СРАВНЕНИЕ
-# ---------------------------------
+# =================================
+# СРАВНЕНИЕ КУРСОВ
+# =================================
 
 def format_comparison(raif, xchange, post):
 
@@ -316,7 +338,7 @@ def format_comparison(raif, xchange, post):
         "🏦 БАНК МЕДИЧИ",
         "СРАВНЕНИЕ КУРСОВ",
         "",
-        "НАЛИЧНЫЕ КУРСЫ",
+        "💵 НАЛИЧНЫЕ КУРСЫ",
         ""
     ]
 
@@ -353,7 +375,6 @@ def format_comparison(raif, xchange, post):
             f"Разница продажи: {sell_diff:+.2f} грн"
         )
 
-        # Где выгоднее продать валюту:
         if buy_diff > 0:
             sell_advice = "X-Change платит больше"
         elif buy_diff < 0:
@@ -361,7 +382,6 @@ def format_comparison(raif, xchange, post):
         else:
             sell_advice = "Одинаковый курс"
 
-        # Где выгоднее купить валюту:
         if sell_diff < 0:
             buy_advice = "X-Change продаёт дешевле"
         elif sell_diff > 0:
@@ -380,7 +400,7 @@ def format_comparison(raif, xchange, post):
         lines.append("")
 
     lines.extend([
-        "Источники:",
+        "ИСТОЧНИКИ:",
         "Raiffeisen: Finance.ua",
         f"X-Change: {post['url']}",
         "",
@@ -391,15 +411,15 @@ def format_comparison(raif, xchange, post):
     return "\n".join(lines)
 
 
-# ---------------------------------
-# ОСНОВНОЙ МОНИТОРИНГ
-# ---------------------------------
+# =================================
+# ОСНОВНАЯ ПРОГРАММА
+# =================================
 
 def main():
 
     state = load_state()
 
-    print("Получаю наличные курсы Raiffeisen...")
+    print("Получаю курсы Raiffeisen...")
 
     raif = fetch_raif_rates()
 
@@ -412,11 +432,6 @@ def main():
     xchange = xchange_data["rates"]
 
     print("X-Change:", xchange)
-
-    print(
-        "Публикация:",
-        xchange_data["url"]
-    )
 
     previous_raif = state.get("raif")
     previous_xchange = state.get("xchange")
@@ -446,7 +461,7 @@ def main():
             )
         else:
             message = (
-                "🔔 ОБНАРУЖЕНО ИЗМЕНЕНИЕ КУРСА\n\n"
+                "🔔 ИЗМЕНЕНИЕ КУРСА\n\n"
                 + message
             )
 
@@ -464,8 +479,8 @@ def main():
     state["xchange_post_id"] = xchange_data["post_id"]
     state["xchange_post_date"] = xchange_data["date"]
 
-    # Сохраняем также старые поля для совместимости.
     state["initialized"] = True
+
     state["last_channel_id"] = max(
         int(state.get("last_channel_id", 0)),
         int(xchange_data["post_id"])
@@ -473,7 +488,7 @@ def main():
 
     save_state(state)
 
-    print("Мониторинг завершён.")
+    print("Мониторинг завершён успешно.")
 
 
 if __name__ == "__main__":
