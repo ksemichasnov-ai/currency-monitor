@@ -19,6 +19,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -40,9 +42,17 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
           git add state.json
+
           if ! git diff --cached --quiet; then
             git commit -m "Update monitoring state"
-            git push
+
+            git fetch origin main
+            git rebase origin/main
+
+            git push origin HEAD:main
+          else
+            echo "No state changes to save."
           fi
           
