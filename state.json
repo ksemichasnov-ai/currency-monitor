@@ -1,5 +1,27 @@
 {
-  "initialized": false,
-  "last_channel_id": 0,
-  "raif": {}
+  "initialized": true,
+  "last_channel_id": 76194,
+  "raif": {
+    "USD": {
+      "buy": 44.9,
+      "sell": 45.42
+    },
+    "EUR": {
+      "buy": 49.1,
+      "sell": 49.8
+    }
+  },
+  "comparison_initialized": true,
+  "xchange": {
+    "USD": {
+      "buy": 45.2,
+      "sell": 45.35
+    },
+    "EUR": {
+      "buy": 49.8,
+      "sell": 49.95
+    }
+  },
+  "xchange_post_id": 76194,
+  "xchange_post_date": ""
 }
