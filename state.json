@@ -23,5 +23,9 @@
     }
   },
   "xchange_post_id": 76194,
-  "xchange_post_date": ""
+  "xchange_post_date": "",
+  "spreads": {
+    "USD": -0.22,
+    "EUR": 0.0
+  }
 }
