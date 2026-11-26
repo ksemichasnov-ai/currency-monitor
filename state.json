@@ -27,5 +27,6 @@
   "spreads": {
     "USD": -0.22,
     "EUR": 0.0
-  }
+  },
+  "telegram_update_offset": 249693346
 }
