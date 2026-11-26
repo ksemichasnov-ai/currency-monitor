@@ -37,7 +37,7 @@ SESSION.headers.update(HEADERS)
 
 
 # =====================================
-# TELEGRAM BOT
+# TELEGRAM
 # =====================================
 
 def telegram_send(message):
@@ -70,7 +70,7 @@ def telegram_send(message):
 
 
 # =====================================
-# СОСТОЯНИЕ МОНИТОРИНГА
+# СОСТОЯНИЕ
 # =====================================
 
 def load_state():
@@ -87,9 +87,7 @@ def load_state():
 
     except Exception as exc:
 
-        print(
-            f"Ошибка чтения state.json: {exc}"
-        )
+        print(f"Ошибка чтения state.json: {exc}")
 
         return {}
 
@@ -107,7 +105,7 @@ def save_state(state):
 
 
 # =====================================
-# ОБРАБОТКА ЧИСЕЛ
+# ЧИСЛА
 # =====================================
 
 def to_float(value):
@@ -130,8 +128,18 @@ def extract_price(text):
     return to_float(match.group())
 
 
+def format_rate(value):
+
+    return f"{value:.2f}".replace(".", ",")
+
+
+def format_difference(value):
+
+    return f"{value:+.2f}".replace(".", ",")
+
+
 # =====================================
-# RAIFFEISEN — FINANCE.UA
+# RAIFFEISEN
 # =====================================
 
 def parse_raif_table(soup):
@@ -209,7 +217,6 @@ def parse_raif_table(soup):
 
 def parse_raif_text(text):
 
-    # Ищем заголовок именно банковского курса.
     heading = re.search(
         r"Курс\s+валют\s+в\s+Райффайзен\s+Банк(?:у|е)",
         text,
@@ -217,13 +224,13 @@ def parse_raif_text(text):
     )
 
     if not heading:
+
         raise RuntimeError(
             "Не найден заголовок курса Raiffeisen."
         )
 
     section = text[heading.end():]
 
-    # Отсекаем карточные курсы.
     card = re.search(
         r"Карткові\s+курси|Карточные\s+курсы",
         section,
@@ -260,6 +267,7 @@ def parse_raif_text(text):
         }
 
     if len(rates) != 2:
+
         raise RuntimeError(
             "Не удалось извлечь USD и EUR "
             "из таблицы Finance.ua. "
@@ -296,19 +304,17 @@ def fetch_raif_rates():
         if soup.title else "не найден"
     )
 
-    # Сначала пробуем извлечь данные из HTML-таблицы.
     rates = parse_raif_table(soup)
 
     if rates:
-        print(
-            "Raiffeisen: курсы найдены в таблице:",
-            rates
-        )
+
+        print("Raiffeisen:", rates)
+
         return rates
 
     print(
         "HTML-таблица не найдена. "
-        "Пробую извлечь курсы из текста страницы."
+        "Пробую извлечь курсы из текста."
     )
 
     text = re.sub(
@@ -319,16 +325,13 @@ def fetch_raif_rates():
 
     rates = parse_raif_text(text)
 
-    print(
-        "Raiffeisen: курсы найдены:",
-        rates
-    )
+    print("Raiffeisen:", rates)
 
     return rates
 
 
 # =====================================
-# X-CHANGE — TELEGRAM CHANNEL
+# X-CHANGE
 # =====================================
 
 def fetch_channel_posts():
@@ -374,6 +377,7 @@ def fetch_channel_posts():
             post_id = int(
                 post_ref.rsplit("/", 1)[1]
             )
+
         except ValueError:
             continue
 
@@ -407,6 +411,7 @@ def fetch_channel_posts():
         })
 
     if not posts:
+
         raise RuntimeError(
             "Не удалось получить публикации X-Change."
         )
@@ -465,9 +470,6 @@ def fetch_xchange_rates():
 
     posts = fetch_channel_posts()
 
-    # Ищем самую свежую публикацию,
-    # содержащую оба курса.
-
     for post in posts:
 
         rates = parse_xchange_rates(
@@ -500,105 +502,66 @@ def fetch_xchange_rates():
 
 
 # =====================================
-# СРАВНЕНИЕ КУРСОВ
+# РАСЧЁТ РАЗНИЦЫ
+# =====================================
+
+def calculate_spreads(raif, xchange):
+
+    spreads = {}
+
+    for currency in ("USD", "EUR"):
+
+        difference = round(
+            xchange[currency]["buy"]
+            - raif[currency]["sell"],
+            2
+        )
+
+        spreads[currency] = difference
+
+    return spreads
+
+
+# =====================================
+# ФОРМИРОВАНИЕ СООБЩЕНИЯ
 # =====================================
 
 def format_comparison(
     raif,
     xchange,
-    post
+    post,
+    spreads
 ):
 
     lines = [
         "🏦 БАНК МЕДИЧИ",
         "СРАВНЕНИЕ КУРСОВ",
-        "",
-        "💵 НАЛИЧНЫЕ КУРСЫ",
         ""
     ]
 
     for currency in ("USD", "EUR"):
 
-        r = raif[currency]
-        x = xchange[currency]
+        raif_sell = raif[currency]["sell"]
+        xchange_buy = xchange[currency]["buy"]
 
-        buy_diff = round(
-            x["buy"] - r["buy"],
-            2
-        )
+        difference = spreads[currency]
 
-        sell_diff = round(
-            x["sell"] - r["sell"],
-            2
-        )
-
-        lines.append(
-            f"💱 {currency}"
-        )
-
-        lines.append(
-            f"Raiffeisen: "
-            f"{r['buy']:.2f} / {r['sell']:.2f}"
-        )
-
-        lines.append(
-            f"X-Change: "
-            f"{x['buy']:.2f} / {x['sell']:.2f}"
-        )
-
-        lines.append("")
-
-        lines.append(
-            f"Разница покупки: {buy_diff:+.2f} грн"
-        )
-
-        lines.append(
-            f"Разница продажи: {sell_diff:+.2f} грн"
-        )
-
-        # Покупка валюты клиентом:
-        # банк продаёт валюту.
-        if sell_diff < 0:
-            buy_advice = (
-                "X-Change продаёт дешевле"
-            )
-        elif sell_diff > 0:
-            buy_advice = (
-                "Raiffeisen продаёт дешевле"
-            )
-        else:
-            buy_advice = "Одинаковый курс"
-
-        # Продажа валюты клиентом:
-        # банк покупает валюту.
-        if buy_diff > 0:
-            sell_advice = (
-                "X-Change покупает дороже"
-            )
-        elif buy_diff < 0:
-            sell_advice = (
-                "Raiffeisen покупает дороже"
-            )
-        else:
-            sell_advice = "Одинаковый курс"
-
-        lines.append(
-            f"Купить валюту: {buy_advice}"
-        )
-
-        lines.append(
-            f"Продать валюту: {sell_advice}"
-        )
-
-        lines.append("")
+        lines.extend([
+            f"💱 {currency} / UAH",
+            f"Райффайзен (продажа): "
+            f"{format_rate(raif_sell)}",
+            f"X-Change (покупка): "
+            f"{format_rate(xchange_buy)}",
+            f"Разница: "
+            f"{format_difference(difference)} грн",
+            ""
+        ])
 
     lines.extend([
         "ИСТОЧНИКИ:",
         "Raiffeisen: Finance.ua",
         f"X-Change: {post['url']}",
         "",
-        "⚠️ Курс Finance.ua может отличаться "
-        "от курса конкретного отделения.",
         "Время публикации X-Change: "
         f"{post['date'] or 'не указано'}"
     ])
@@ -614,55 +577,45 @@ def main():
 
     state = load_state()
 
-    # 1. Получаем Raiffeisen.
+    # Получаем курсы.
 
     raif = fetch_raif_rates()
-
-    print(
-        "RAIFFEISEN:",
-        json.dumps(
-            raif,
-            ensure_ascii=False
-        )
-    )
-
-    # 2. Получаем X-Change.
 
     xchange_data = fetch_xchange_rates()
 
     xchange = xchange_data["rates"]
 
-    print(
-        "X-CHANGE:",
-        json.dumps(
-            xchange,
-            ensure_ascii=False
-        )
+    # Рассчитываем разницу.
+
+    spreads = calculate_spreads(
+        raif,
+        xchange
     )
 
-    # 3. Сравниваем с предыдущим состоянием.
+    print("RAIFFEISEN:", raif)
+    print("X-CHANGE:", xchange)
+    print("РАЗНИЦА:", spreads)
 
-    previous_raif = state.get("raif")
-    previous_xchange = state.get("xchange")
+    # Сравниваем с предыдущими значениями.
+
+    previous_spreads = state.get("spreads")
 
     first_run = not state.get(
         "comparison_initialized",
         False
     )
 
-    changed = (
-        raif != previous_raif
-        or xchange != previous_xchange
-    )
+    changed = spreads != previous_spreads
 
-    # 4. Отправляем уведомление.
+    # Отправляем сообщение.
 
     if first_run or changed:
 
         message = format_comparison(
             raif,
             xchange,
-            xchange_data
+            xchange_data,
+            spreads
         )
 
         if first_run:
@@ -675,29 +628,25 @@ def main():
         else:
 
             message = (
-                "🔔 ИЗМЕНЕНИЕ КУРСА\n\n"
+                "🔔 ИЗМЕНИЛАСЬ РАЗНИЦА КУРСОВ\n\n"
                 + message
             )
 
         telegram_send(message)
 
-        print(
-            "Сравнение отправлено в Telegram."
-        )
+        print("Уведомление отправлено.")
 
     else:
 
-        print(
-            "Изменений курсов нет."
-        )
+        print("Разница курсов не изменилась.")
 
-    # 5. Сохраняем состояние.
+    # Сохраняем состояние.
 
     state["comparison_initialized"] = True
 
     state["raif"] = raif
-
     state["xchange"] = xchange
+    state["spreads"] = spreads
 
     state["xchange_post_id"] = (
         xchange_data["post_id"]
@@ -710,22 +659,13 @@ def main():
     state["initialized"] = True
 
     state["last_channel_id"] = max(
-        int(
-            state.get(
-                "last_channel_id",
-                0
-            )
-        ),
-        int(
-            xchange_data["post_id"]
-        )
+        int(state.get("last_channel_id", 0)),
+        int(xchange_data["post_id"])
     )
 
     save_state(state)
 
-    print(
-        "Мониторинг завершён успешно."
-    )
+    print("Мониторинг завершён успешно.")
 
 
 # =====================================
@@ -746,4 +686,4 @@ if __name__ == "__main__":
         )
 
         raise
-        
+    
