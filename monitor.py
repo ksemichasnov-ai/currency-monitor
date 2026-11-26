@@ -25,7 +25,6 @@ CHANNEL = "X_Change_Vinnitsa"
 CHANNEL_URL = f"https://t.me/{CHANNEL}"
 CHANNEL_PREVIEW_URL = f"https://t.me/s/{CHANNEL}"
 
-# Минимальная разница для сигнала
 TRAVEL_THRESHOLD = 0.20
 
 HEADERS = {
@@ -43,17 +42,14 @@ SESSION.headers.update(HEADERS)
 # TELEGRAM
 # =====================================
 
-def telegram_send(message):
+def telegram_send_to(chat_id, message):
 
-    url = (
-        f"https://api.telegram.org/"
-        f"bot{BOT_TOKEN}/sendMessage"
-    )
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
     response = SESSION.post(
         url,
         json={
-            "chat_id": CHAT_ID,
+            "chat_id": chat_id,
             "text": message[:4000],
             "parse_mode": "HTML",
             "disable_web_page_preview": True,
@@ -66,11 +62,99 @@ def telegram_send(message):
     data = response.json()
 
     if not data.get("ok"):
-        raise RuntimeError(
-            f"Telegram API error: {data}"
-        )
+        raise RuntimeError(f"Telegram API error: {data}")
 
     return data
+
+
+def telegram_send(message):
+    return telegram_send_to(CHAT_ID, message)
+
+
+def process_telegram_commands(state):
+
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
+
+    params = {
+        "timeout": 0,
+        "allowed_updates": json.dumps(["message"])
+    }
+
+    offset = state.get("telegram_update_offset")
+
+    if offset is not None:
+        params["offset"] = offset
+
+    response = SESSION.get(
+        url,
+        params=params,
+        timeout=20
+    )
+
+    response.raise_for_status()
+
+    data = response.json()
+
+    if not data.get("ok"):
+        raise RuntimeError(f"Telegram API error: {data}")
+
+    for update in data.get("result", []):
+
+        state["telegram_update_offset"] = (
+            update["update_id"] + 1
+        )
+
+        message = update.get("message", {})
+        text = message.get("text", "")
+
+        if not text:
+            continue
+
+        command = text.split()[0].split("@")[0].lower()
+
+        if command != "/start":
+            continue
+
+        chat_id = message["chat"]["id"]
+
+        raif = state.get("raif")
+        xchange = state.get("xchange")
+        spreads = state.get("spreads")
+
+        if raif and xchange and spreads:
+
+            reply = format_comparison(
+                raif,
+                xchange,
+                {
+                    "url": (
+                        f"{CHANNEL_URL}/"
+                        f"{state.get('xchange_post_id', '')}"
+                    ),
+                    "date": state.get(
+                        "xchange_post_date", ""
+                    )
+                },
+                spreads
+            )
+
+            reply = (
+                "🏦 ПОСЛЕДНИЕ СОХРАНЁННЫЕ КУРСЫ\n\n"
+                + reply
+            )
+
+        else:
+
+            reply = (
+                "⏳ Мониторинг ещё не получил курсы.\n"
+                "Попробуй повторить запрос через несколько минут."
+            )
+
+        telegram_send_to(chat_id, reply)
+
+        print("Ответ на /start отправлен.")
+
+    save_state(state)
 
 
 # =====================================
@@ -84,15 +168,11 @@ def load_state():
 
     try:
         return json.loads(
-            STATE_FILE.read_text(
-                encoding="utf-8"
-            )
+            STATE_FILE.read_text(encoding="utf-8")
         )
 
     except Exception as exc:
-
         print(f"Ошибка чтения state.json: {exc}")
-
         return {}
 
 
@@ -113,10 +193,7 @@ def save_state(state):
 # =====================================
 
 def to_float(value):
-
-    return float(
-        value.replace(",", ".")
-    )
+    return float(value.replace(",", "."))
 
 
 def extract_price(text):
@@ -133,12 +210,10 @@ def extract_price(text):
 
 
 def format_rate(value):
-
     return f"{value:.2f}".replace(".", ",")
 
 
 def format_difference(value):
-
     return f"{value:+.2f}".replace(".", ",")
 
 
@@ -176,9 +251,7 @@ def parse_raif_table(soup):
 
         for row in rows:
 
-            cells = row.find_all(
-                ["td", "th"]
-            )
+            cells = row.find_all(["td", "th"])
 
             if len(cells) < 3:
                 continue
@@ -192,17 +265,11 @@ def parse_raif_table(soup):
                 continue
 
             buy = extract_price(
-                cells[1].get_text(
-                    " ",
-                    strip=True
-                )
+                cells[1].get_text(" ", strip=True)
             )
 
             sell = extract_price(
-                cells[2].get_text(
-                    " ",
-                    strip=True
-                )
+                cells[2].get_text(" ", strip=True)
             )
 
             if buy is None or sell is None:
@@ -228,7 +295,6 @@ def parse_raif_text(text):
     )
 
     if not heading:
-
         raise RuntimeError(
             "Не найден заголовок курса Raiffeisen."
         )
@@ -271,10 +337,9 @@ def parse_raif_text(text):
         }
 
     if len(rates) != 2:
-
         raise RuntimeError(
             "Не удалось извлечь USD и EUR "
-            "из таблицы Finance.ua. "
+            "из Finance.ua. "
             f"Фрагмент: {section[:1500]}"
         )
 
@@ -292,10 +357,7 @@ def fetch_raif_rates():
 
     response.raise_for_status()
 
-    print(
-        "Finance.ua HTTP:",
-        response.status_code
-    )
+    print("Finance.ua HTTP:", response.status_code)
 
     soup = BeautifulSoup(
         response.text,
@@ -311,15 +373,10 @@ def fetch_raif_rates():
     rates = parse_raif_table(soup)
 
     if rates:
-
         print("Raiffeisen:", rates)
-
         return rates
 
-    print(
-        "HTML-таблица не найдена. "
-        "Пробую извлечь курсы из текста."
-    )
+    print("HTML-таблица не найдена. Пробую текст.")
 
     text = re.sub(
         r"\s+",
@@ -340,9 +397,7 @@ def fetch_raif_rates():
 
 def fetch_channel_posts():
 
-    print(
-        f"Получаю публикации @{CHANNEL}..."
-    )
+    print(f"Получаю публикации @{CHANNEL}...")
 
     response = SESSION.get(
         CHANNEL_PREVIEW_URL,
@@ -369,10 +424,7 @@ def fetch_channel_posts():
         if not message:
             continue
 
-        post_ref = message.get(
-            "data-post",
-            ""
-        )
+        post_ref = message.get("data-post", "")
 
         if "/" not in post_ref:
             continue
@@ -381,7 +433,6 @@ def fetch_channel_posts():
             post_id = int(
                 post_ref.rsplit("/", 1)[1]
             )
-
         except ValueError:
             continue
 
@@ -403,8 +454,7 @@ def fetch_channel_posts():
 
         post_date = (
             date_node.get("datetime", "")
-            if date_node
-            else ""
+            if date_node else ""
         )
 
         posts.append({
@@ -415,7 +465,6 @@ def fetch_channel_posts():
         })
 
     if not posts:
-
         raise RuntimeError(
             "Не удалось получить публикации X-Change."
         )
@@ -425,10 +474,7 @@ def fetch_channel_posts():
         reverse=True
     )
 
-    print(
-        "Получено публикаций:",
-        len(posts)
-    )
+    print("Получено публикаций:", len(posts))
 
     return posts
 
@@ -487,10 +533,7 @@ def fetch_xchange_rates():
                 post["url"]
             )
 
-            print(
-                "Курсы X-Change:",
-                rates
-            )
+            print("Курсы X-Change:", rates)
 
             return {
                 "rates": rates,
@@ -547,21 +590,15 @@ def format_comparison(
 
         raif_sell = raif[currency]["sell"]
         xchange_buy = xchange[currency]["buy"]
-
         difference = spreads[currency]
 
         lines.extend([
             f"💱 {currency} / UAH",
-            f"Райффайзен (продажа): "
-            f"{format_rate(raif_sell)}",
-            f"X-Change (покупка): "
-            f"{format_rate(xchange_buy)}",
-            f"Разница: "
-            f"{format_difference(difference)} грн",
+            f"Райффайзен (продажа): {format_rate(raif_sell)}",
+            f"X-Change (покупка): {format_rate(xchange_buy)}",
+            f"Разница: {format_difference(difference)} грн",
             ""
         ])
-
-    # Сигнал при разнице от +20 копеек.
 
     if any(
         difference >= TRAVEL_THRESHOLD
@@ -584,11 +621,13 @@ def main():
 
     state = load_state()
 
-    # Получаем курсы Raiffeisen.
+    # Проверяем команды Telegram.
+
+    process_telegram_commands(state)
+
+    # Получаем курсы.
 
     raif = fetch_raif_rates()
-
-    # Получаем курсы X-Change.
 
     xchange_data = fetch_xchange_rates()
 
@@ -605,8 +644,6 @@ def main():
     print("X-CHANGE:", xchange)
     print("РАЗНИЦА:", spreads)
 
-    # Проверяем изменение разницы.
-
     previous_spreads = state.get("spreads")
 
     first_run = not state.get(
@@ -616,7 +653,7 @@ def main():
 
     changed = spreads != previous_spreads
 
-    # Отправляем уведомление.
+    # Отправляем уведомление при изменении.
 
     if first_run or changed:
 
@@ -628,14 +665,11 @@ def main():
         )
 
         if first_run:
-
             message = (
                 "✅ МОНИТОРИНГ ЗАПУЩЕН\n\n"
                 + message
             )
-
         else:
-
             message = (
                 "🔔 ИЗМЕНИЛАСЬ РАЗНИЦА КУРСОВ\n\n"
                 + message
@@ -684,7 +718,6 @@ def main():
 if __name__ == "__main__":
 
     try:
-
         main()
 
     except Exception as exc:
