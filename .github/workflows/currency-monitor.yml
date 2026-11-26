@@ -1,6 +1,6 @@
 name: Currency monitor
 
-on:
+'on':
   workflow_dispatch:
   schedule:
     - cron: "*/5 * * * *"
