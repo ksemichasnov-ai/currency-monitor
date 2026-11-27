@@ -25,13 +25,8 @@ CHANNEL = "X_Change_Vinnitsa"
 CHANNEL_URL = f"https://t.me/{CHANNEL}"
 CHANNEL_PREVIEW_URL = f"https://t.me/s/{CHANNEL}"
 
-# Проверяем только 5 последних публикаций
 POSTS_LIMIT = 5
-
-# Порог выгодной разницы
 TRAVEL_THRESHOLD = 0.20
-
-# Минимальное изменение разницы для уведомления
 CHANGE_THRESHOLD = 0.01
 
 HEADERS = {
@@ -206,7 +201,7 @@ def to_float(value):
 def extract_price(text):
 
     match = re.search(
-        r"\d{1,3}[,.]\d{1,3}",
+        r"\d{1,3}[,.]\d{2}",
         text
     )
 
@@ -398,7 +393,7 @@ def fetch_raif_rates():
 
 
 # =====================================
-# X-CHANGE
+# X-CHANGE: ПОСЛЕДНИЕ ПУБЛИКАЦИИ
 # =====================================
 
 def fetch_channel_posts():
@@ -475,13 +470,11 @@ def fetch_channel_posts():
             "Не удалось получить публикации X-Change."
         )
 
-    # Сортируем от самой новой к старой.
     posts.sort(
         key=lambda item: item["id"],
         reverse=True
     )
 
-    # Оставляем только 5 последних.
     posts = posts[:POSTS_LIMIT]
 
     print(
@@ -495,7 +488,7 @@ def fetch_channel_posts():
 
 
 # =====================================
-# ИЗВЛЕЧЕНИЕ КУРСОВ X-CHANGE
+# ПАРСЕР X-CHANGE
 # =====================================
 
 def parse_xchange_rates(text):
@@ -504,11 +497,17 @@ def parse_xchange_rates(text):
 
     for currency in ("USD", "EUR"):
 
+        # Разрешаем:
+        # 45,15 - 45,35
+        # 49,8 - 50
+        # 49.80 - 50.00
+        # 49 - 50
+
         pattern = (
             rf"\b{currency}\b\s*:?\s*"
-            r"(\d{1,3}[,.]\d{1,3})"
+            r"(\d{1,3}(?:[,.]\d{1,3})?)"
             r"\s*[-–—/|]\s*"
-            r"(\d{1,3}[,.]\d{1,3})"
+            r"(\d{1,3}(?:[,.]\d{1,3})?)"
         )
 
         match = re.search(
@@ -534,9 +533,6 @@ def parse_xchange_rates(text):
 def fetch_xchange_rates():
 
     posts = fetch_channel_posts()
-
-    # Ищем курсы в последних 5 публикациях.
-    # Первая найденная публикация будет самой новой.
 
     for post in posts:
 
@@ -573,7 +569,7 @@ def fetch_xchange_rates():
     raise RuntimeError(
         "В последних 5 публикациях X-Change "
         "не найдены полные курсы USD и EUR. "
-        "Старые сохранённые курсы не используются."
+        "Старые курсы не используются."
     )
 
 
@@ -587,9 +583,6 @@ def calculate_spreads(raif, xchange):
 
     for currency in ("USD", "EUR"):
 
-        # Покупаем валюту в Райффайзене,
-        # продаём в X-Change.
-
         difference = round(
             xchange[currency]["buy"]
             - raif[currency]["sell"],
@@ -602,7 +595,7 @@ def calculate_spreads(raif, xchange):
 
 
 # =====================================
-# ПРОВЕРКА ИЗМЕНЕНИЯ РАЗНИЦЫ
+# ПРОВЕРКА ИЗМЕНЕНИЙ
 # =====================================
 
 def has_spread_changed(current, previous):
@@ -613,20 +606,22 @@ def has_spread_changed(current, previous):
     for currency in ("USD", "EUR"):
 
         old_value = previous.get(currency)
-
         new_value = current.get(currency)
 
         if old_value is None or new_value is None:
             return True
 
         change = abs(
-            round(new_value - float(old_value), 2)
+            round(
+                new_value - float(old_value),
+                2
+            )
         )
 
         print(
-            f"{currency}: предыдущая разница "
-            f"{format_difference(float(old_value))}, "
-            f"новая {format_difference(new_value)}, "
+            f"{currency}: старая разница "
+            f"{format_difference(float(old_value))}; "
+            f"новая {format_difference(new_value)}; "
             f"изменение {format_rate(change)}"
         )
 
@@ -677,6 +672,11 @@ def format_comparison(
             "<b>🔥 ЮРА, ПОРА ЕХАТЬ!</b>"
         ])
 
+    lines.extend([
+        "",
+        f"Публикация X-Change: {post['url']}"
+    ])
+
     return "\n".join(lines)
 
 
@@ -688,17 +688,17 @@ def main():
 
     state = load_state()
 
-    # Проверяем команды Telegram.
+    # Получаем команды Telegram.
     process_telegram_commands(state)
 
-    # Получаем актуальные курсы.
+    # Получаем свежие курсы.
     raif = fetch_raif_rates()
 
     xchange_data = fetch_xchange_rates()
 
     xchange = xchange_data["rates"]
 
-    # Рассчитываем разницу.
+    # Считаем разницу.
     spreads = calculate_spreads(
         raif,
         xchange
@@ -724,9 +724,7 @@ def main():
         previous_spreads
     )
 
-    # Отправляем сообщение при первом запуске
-    # или изменении разницы минимум на 1 копейку.
-
+    # Отправляем уведомление.
     if first_run or changed:
 
         message = format_comparison(
@@ -750,20 +748,19 @@ def main():
                 + message
             )
 
+        # Сначала отправка, затем сохранение состояния.
         telegram_send(message)
 
-        print("Уведомление успешно отправлено в Telegram.")
+        print("Уведомление успешно отправлено.")
 
     else:
 
         print(
-            "Разница не изменилась. "
+            "Разница курсов не изменилась. "
             "Уведомление не требуется."
         )
 
-    # Сохраняем только после успешной отправки
-    # или подтверждения, что изменения нет.
-
+    # Сохраняем актуальные данные.
     state["comparison_initialized"] = True
 
     state["raif"] = raif
@@ -806,4 +803,3 @@ if __name__ == "__main__":
         )
 
         raise
-    
