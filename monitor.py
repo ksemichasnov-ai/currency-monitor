@@ -13,8 +13,11 @@ from bs4 import BeautifulSoup
 
 STATE_FILE = Path("state.json")
 
-BOT_TOKEN = os.environ["BOT_TOKEN"]
-CHAT_ID = os.environ["CHAT_ID"]
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+CHAT_ID = os.environ.get("CHAT_ID")
+
+if not BOT_TOKEN or not CHAT_ID:
+    raise RuntimeError("Не заданы BOT_TOKEN или CHAT_ID в GitHub Secrets.")
 
 FINANCE_URL = (
     "https://finance.ua/ua/banks/"
@@ -27,10 +30,7 @@ CHANNEL_PREVIEW_URL = f"https://t.me/s/{CHANNEL}"
 
 POSTS_LIMIT = 5
 
-# Сигнал при положительной разнице от 20 копеек
 TRAVEL_THRESHOLD = 0.20
-
-# Уведомление при изменении разницы от 1 копейки
 CHANGE_THRESHOLD = 0.01
 
 HEADERS = {
@@ -70,6 +70,7 @@ def telegram_send_to(chat_id, message):
     if not data.get("ok"):
         raise RuntimeError(f"Telegram API error: {data}")
 
+    print("Telegram: сообщение успешно доставлено API.")
     return data
 
 
@@ -117,50 +118,80 @@ def process_telegram_commands(state):
             continue
 
         command = text.split()[0].split("@")[0].lower()
-
-        if command != "/start":
-            continue
-
         chat_id = message["chat"]["id"]
 
-        raif = state.get("raif")
-        xchange = state.get("xchange")
-        spreads = state.get("spreads")
+        if command == "/start":
 
-        if raif and xchange and spreads:
+            raif = state.get("raif")
+            xchange = state.get("xchange")
+            spreads = state.get("spreads")
 
-            reply = format_comparison(
-                raif,
-                xchange,
-                {
-                    "url": (
-                        f"{CHANNEL_URL}/"
-                        f"{state.get('xchange_post_id', '')}"
-                    ),
-                    "date": state.get(
-                        "xchange_post_date", ""
-                    )
-                },
-                spreads
+            if raif and xchange and spreads:
+
+                reply = format_comparison(
+                    raif,
+                    xchange,
+                    {
+                        "url": (
+                            f"{CHANNEL_URL}/"
+                            f"{state.get('xchange_post_id', '')}"
+                        ),
+                        "date": state.get(
+                            "xchange_post_date", ""
+                        )
+                    },
+                    spreads
+                )
+
+                reply = (
+                    "🏦 ПОСЛЕДНИЕ СОХРАНЁННЫЕ КУРСЫ\n\n"
+                    + reply
+                )
+
+            else:
+
+                reply = (
+                    "⏳ Мониторинг ещё не получил курсы."
+                )
+
+            telegram_send_to(chat_id, reply)
+
+            print("Ответ на /start отправлен.")
+
+        elif command == "/test":
+
+            telegram_send_to(
+                chat_id,
+                "✅ TELEGRAM РАБОТАЕТ. "
+                "Бот успешно отправляет сообщения."
             )
 
-            reply = (
-                "🏦 ПОСЛЕДНИЕ СОХРАНЁННЫЕ КУРСЫ\n\n"
-                + reply
-            )
-
-        else:
-
-            reply = (
-                "⏳ Мониторинг ещё не получил курсы.\n"
-                "Попробуй повторить запрос через несколько минут."
-            )
-
-        telegram_send_to(chat_id, reply)
-
-        print("Ответ на /start отправлен.")
+            print("Ручной тест Telegram отправлен.")
 
     save_state(state)
+
+
+def telegram_startup_test(state):
+
+    if state.get("telegram_test_sent"):
+        print("Первоначальный тест Telegram уже пройден.")
+        return
+
+    print("Выполняю первоначальный тест Telegram...")
+
+    telegram_send(
+        "🔔 <b>ТЕСТ TELEGRAM</b>\n\n"
+        "Бот успешно подключился к Telegram.\n"
+        "Отправка сообщений работает."
+    )
+
+    state["telegram_test_sent"] = True
+
+    # Сохраняем сразу после успешного теста,
+    # чтобы не отправлять его повторно при каждой ошибке.
+    save_state(state)
+
+    print("Первоначальный тест Telegram пройден.")
 
 
 # =====================================
@@ -397,7 +428,7 @@ def fetch_raif_rates():
 
 
 # =====================================
-# X-CHANGE
+# X-CHANGE: ПОСЛЕДНИЕ ПУБЛИКАЦИИ
 # =====================================
 
 def fetch_channel_posts():
@@ -593,7 +624,7 @@ def calculate_spreads(raif, xchange):
 
 
 # =====================================
-# СРАВНЕНИЕ КУРСОВ РАЙФФАЙЗЕНА
+# СРАВНЕНИЕ КУРСОВ RAIFFEISEN
 # =====================================
 
 def compare_raif_rates(current, previous):
@@ -601,7 +632,7 @@ def compare_raif_rates(current, previous):
     changes = []
 
     if not previous:
-        print("Предыдущие курсы Райффайзена отсутствуют.")
+        print("Нет предыдущих курсов Raiffeisen.")
         return changes
 
     for currency in ("USD", "EUR"):
@@ -646,7 +677,10 @@ def compare_raif_rates(current, previous):
 def has_spread_changed(current, previous):
 
     if not previous:
+        print("Нет предыдущей разницы курсов.")
         return True
+
+    changed = False
 
     for currency in ("USD", "EUR"):
 
@@ -654,7 +688,8 @@ def has_spread_changed(current, previous):
         new_value = current.get(currency)
 
         if old_value is None or new_value is None:
-            return True
+            changed = True
+            continue
 
         change = abs(
             round(
@@ -671,9 +706,9 @@ def has_spread_changed(current, previous):
         )
 
         if change >= CHANGE_THRESHOLD:
-            return True
+            changed = True
 
-    return False
+    return changed
 
 
 # =====================================
@@ -720,7 +755,7 @@ def format_raif_changes(changes):
 
 
 # =====================================
-# ФОРМИРОВАНИЕ СООБЩЕНИЯ
+# ОБЩЕЕ СООБЩЕНИЕ
 # =====================================
 
 def format_comparison(
@@ -776,10 +811,17 @@ def main():
 
     state = load_state()
 
-    # Обрабатываем команды Telegram.
+    print("=====================================")
+    print("БАНК МЕДИЧИ — ЗАПУСК МОНИТОРИНГА")
+    print("=====================================")
+
+    # Первоначальный тест Telegram.
+    telegram_startup_test(state)
+
+    # Проверяем команды.
     process_telegram_commands(state)
 
-    # Сохраняем предыдущие курсы ДО получения новых.
+    # Запоминаем предыдущие курсы.
     previous_raif = state.get("raif")
     previous_spreads = state.get("spreads")
 
@@ -788,14 +830,14 @@ def main():
         False
     )
 
-    # Получаем актуальные курсы.
+    # Получаем новые курсы.
     raif = fetch_raif_rates()
 
     xchange_data = fetch_xchange_rates()
 
     xchange = xchange_data["rates"]
 
-    # Считаем новую разницу.
+    # Рассчитываем разницу.
     spreads = calculate_spreads(
         raif,
         xchange
@@ -809,46 +851,41 @@ def main():
     print("РАЗНИЦА:", spreads)
     print("===================================")
 
-    # ПЕРВОЕ СРАВНЕНИЕ:
-    # Изменение каждого курса Райффайзена.
+    # СРАВНЕНИЕ №1: САМИ КУРСЫ РАЙФА.
     raif_changes = compare_raif_rates(
         raif,
         previous_raif
     )
 
-    # ВТОРОЕ СРАВНЕНИЕ:
-    # Изменение разницы между банками.
+    # СРАВНЕНИЕ №2: РАЗНИЦА БАНКОВ.
     spread_changed = has_spread_changed(
         spreads,
         previous_spreads
     )
 
-    # Формируем уведомление.
+    # Собираем уведомления.
     notification_parts = []
 
     if first_run:
 
         notification_parts.append(
-            "✅ МОНИТОРИНГ ЗАПУЩЕН"
+            "✅ <b>МОНИТОРИНГ ЗАПУЩЕН</b>"
         )
 
     else:
 
         if raif_changes:
-
             notification_parts.append(
                 format_raif_changes(raif_changes)
             )
 
         if spread_changed:
-
             notification_parts.append(
                 "🔔 <b>ИЗМЕНИЛАСЬ РАЗНИЦА КУРСОВ</b>"
             )
 
-    # Отправляем уведомление, если сработало
-    # хотя бы одно из двух независимых сравнений.
-    if first_run or raif_changes or spread_changed:
+    # Отправляем, если сработало хотя бы одно сравнение.
+    if notification_parts:
 
         message = "\n\n".join(
             part for part in notification_parts if part
@@ -863,17 +900,16 @@ def main():
 
         telegram_send(message)
 
-        print("Уведомление успешно отправлено.")
+        print("Уведомление отправлено.")
 
     else:
 
         print(
-            "Курсы Райффайзена и разница банков "
-            "не изменились. Уведомление не требуется."
+            "Изменений нет. Уведомление не требуется."
         )
 
-    # Сохраняем новые значения только после
-    # успешной отправки уведомления.
+    # Сохраняем актуальные значения.
+    # Сохранение выполняется после успешной отправки.
     state["comparison_initialized"] = True
 
     state["raif"] = raif
@@ -916,4 +952,4 @@ if __name__ == "__main__":
         )
 
         raise
-                
+    
