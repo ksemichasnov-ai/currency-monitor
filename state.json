@@ -1,6 +1,6 @@
 {
   "initialized": true,
-  "last_channel_id": 76220,
+  "last_channel_id": 76225,
   "raif": {
     "USD": {
       "buy": 44.9,
@@ -22,11 +22,12 @@
       "sell": 50.0
     }
   },
-  "xchange_post_id": 76220,
+  "xchange_post_id": 76225,
   "xchange_post_date": "",
   "spreads": {
     "USD": -0.27,
     "EUR": 0.0
   },
-  "telegram_update_offset": 249693349
+  "telegram_update_offset": 249693349,
+  "telegram_test_sent": true
 }
