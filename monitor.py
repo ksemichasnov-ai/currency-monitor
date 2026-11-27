@@ -25,7 +25,14 @@ CHANNEL = "X_Change_Vinnitsa"
 CHANNEL_URL = f"https://t.me/{CHANNEL}"
 CHANNEL_PREVIEW_URL = f"https://t.me/s/{CHANNEL}"
 
+# Проверяем только 5 последних публикаций
+POSTS_LIMIT = 5
+
+# Порог выгодной разницы
 TRAVEL_THRESHOLD = 0.20
+
+# Минимальное изменение разницы для уведомления
+CHANGE_THRESHOLD = 0.01
 
 HEADERS = {
     "User-Agent": (
@@ -199,7 +206,7 @@ def to_float(value):
 def extract_price(text):
 
     match = re.search(
-        r"\d{1,3}[,.]\d{2}",
+        r"\d{1,3}[,.]\d{1,3}",
         text
     )
 
@@ -338,8 +345,7 @@ def parse_raif_text(text):
 
     if len(rates) != 2:
         raise RuntimeError(
-            "Не удалось извлечь USD и EUR "
-            "из Finance.ua. "
+            "Не удалось извлечь USD и EUR из Finance.ua. "
             f"Фрагмент: {section[:1500]}"
         )
 
@@ -469,12 +475,21 @@ def fetch_channel_posts():
             "Не удалось получить публикации X-Change."
         )
 
+    # Сортируем от самой новой к старой.
     posts.sort(
         key=lambda item: item["id"],
         reverse=True
     )
 
-    print("Получено публикаций:", len(posts))
+    # Оставляем только 5 последних.
+    posts = posts[:POSTS_LIMIT]
+
+    print(
+        "ID последних публикаций:",
+        [post["id"] for post in posts]
+    )
+
+    print("Проверяем публикаций:", len(posts))
 
     return posts
 
@@ -520,6 +535,9 @@ def fetch_xchange_rates():
 
     posts = fetch_channel_posts()
 
+    # Ищем курсы в последних 5 публикациях.
+    # Первая найденная публикация будет самой новой.
+
     for post in posts:
 
         rates = parse_xchange_rates(
@@ -533,6 +551,11 @@ def fetch_xchange_rates():
                 post["url"]
             )
 
+            print(
+                "Дата публикации:",
+                post["date"]
+            )
+
             print("Курсы X-Change:", rates)
 
             return {
@@ -542,9 +565,15 @@ def fetch_xchange_rates():
                 "url": post["url"]
             }
 
+        print(
+            f"В публикации №{post['id']} "
+            "полные курсы не найдены."
+        )
+
     raise RuntimeError(
-        "Не найдена публикация X-Change "
-        "с полными курсами USD и EUR."
+        "В последних 5 публикациях X-Change "
+        "не найдены полные курсы USD и EUR. "
+        "Старые сохранённые курсы не используются."
     )
 
 
@@ -558,6 +587,9 @@ def calculate_spreads(raif, xchange):
 
     for currency in ("USD", "EUR"):
 
+        # Покупаем валюту в Райффайзене,
+        # продаём в X-Change.
+
         difference = round(
             xchange[currency]["buy"]
             - raif[currency]["sell"],
@@ -567,6 +599,41 @@ def calculate_spreads(raif, xchange):
         spreads[currency] = difference
 
     return spreads
+
+
+# =====================================
+# ПРОВЕРКА ИЗМЕНЕНИЯ РАЗНИЦЫ
+# =====================================
+
+def has_spread_changed(current, previous):
+
+    if not previous:
+        return True
+
+    for currency in ("USD", "EUR"):
+
+        old_value = previous.get(currency)
+
+        new_value = current.get(currency)
+
+        if old_value is None or new_value is None:
+            return True
+
+        change = abs(
+            round(new_value - float(old_value), 2)
+        )
+
+        print(
+            f"{currency}: предыдущая разница "
+            f"{format_difference(float(old_value))}, "
+            f"новая {format_difference(new_value)}, "
+            f"изменение {format_rate(change)}"
+        )
+
+        if change >= CHANGE_THRESHOLD:
+            return True
+
+    return False
 
 
 # =====================================
@@ -607,7 +674,7 @@ def format_comparison(
 
         lines.extend([
             "",
-            "<b>🔥 ЮРА ПОРА ЕХАТЬ!</b>"
+            "<b>🔥 ЮРА, ПОРА ЕХАТЬ!</b>"
         ])
 
     return "\n".join(lines)
@@ -622,11 +689,9 @@ def main():
     state = load_state()
 
     # Проверяем команды Telegram.
-
     process_telegram_commands(state)
 
-    # Получаем курсы.
-
+    # Получаем актуальные курсы.
     raif = fetch_raif_rates()
 
     xchange_data = fetch_xchange_rates()
@@ -634,15 +699,18 @@ def main():
     xchange = xchange_data["rates"]
 
     # Рассчитываем разницу.
-
     spreads = calculate_spreads(
         raif,
         xchange
     )
 
+    print("")
+    print("========== ТЕКУЩИЕ КУРСЫ ==========")
     print("RAIFFEISEN:", raif)
     print("X-CHANGE:", xchange)
+    print("ПУБЛИКАЦИЯ:", xchange_data["post_id"])
     print("РАЗНИЦА:", spreads)
+    print("===================================")
 
     previous_spreads = state.get("spreads")
 
@@ -651,9 +719,13 @@ def main():
         False
     )
 
-    changed = spreads != previous_spreads
+    changed = has_spread_changed(
+        spreads,
+        previous_spreads
+    )
 
-    # Отправляем уведомление при изменении.
+    # Отправляем сообщение при первом запуске
+    # или изменении разницы минимум на 1 копейку.
 
     if first_run or changed:
 
@@ -665,11 +737,14 @@ def main():
         )
 
         if first_run:
+
             message = (
                 "✅ МОНИТОРИНГ ЗАПУЩЕН\n\n"
                 + message
             )
+
         else:
+
             message = (
                 "🔔 ИЗМЕНИЛАСЬ РАЗНИЦА КУРСОВ\n\n"
                 + message
@@ -677,13 +752,17 @@ def main():
 
         telegram_send(message)
 
-        print("Уведомление отправлено.")
+        print("Уведомление успешно отправлено в Telegram.")
 
     else:
 
-        print("Разница курсов не изменилась.")
+        print(
+            "Разница не изменилась. "
+            "Уведомление не требуется."
+        )
 
-    # Сохраняем состояние.
+    # Сохраняем только после успешной отправки
+    # или подтверждения, что изменения нет.
 
     state["comparison_initialized"] = True
 
@@ -699,8 +778,6 @@ def main():
         xchange_data["date"]
     )
 
-    state["initialized"] = True
-
     state["last_channel_id"] = max(
         int(state.get("last_channel_id", 0)),
         int(xchange_data["post_id"])
@@ -708,6 +785,7 @@ def main():
 
     save_state(state)
 
+    print("Состояние сохранено.")
     print("Мониторинг завершён успешно.")
 
 
