@@ -26,7 +26,11 @@ CHANNEL_URL = f"https://t.me/{CHANNEL}"
 CHANNEL_PREVIEW_URL = f"https://t.me/s/{CHANNEL}"
 
 POSTS_LIMIT = 5
+
+# Сигнал при положительной разнице от 20 копеек
 TRAVEL_THRESHOLD = 0.20
+
+# Уведомление при изменении разницы от 1 копейки
 CHANGE_THRESHOLD = 0.01
 
 HEADERS = {
@@ -195,7 +199,7 @@ def save_state(state):
 # =====================================
 
 def to_float(value):
-    return float(value.replace(",", "."))
+    return float(str(value).replace(",", "."))
 
 
 def extract_price(text):
@@ -393,7 +397,7 @@ def fetch_raif_rates():
 
 
 # =====================================
-# X-CHANGE: ПОСЛЕДНИЕ ПУБЛИКАЦИИ
+# X-CHANGE
 # =====================================
 
 def fetch_channel_posts():
@@ -497,12 +501,6 @@ def parse_xchange_rates(text):
 
     for currency in ("USD", "EUR"):
 
-        # Разрешаем:
-        # 45,15 - 45,35
-        # 49,8 - 50
-        # 49.80 - 50.00
-        # 49 - 50
-
         pattern = (
             rf"\b{currency}\b\s*:?\s*"
             r"(\d{1,3}(?:[,.]\d{1,3})?)"
@@ -595,7 +593,54 @@ def calculate_spreads(raif, xchange):
 
 
 # =====================================
-# ПРОВЕРКА ИЗМЕНЕНИЙ
+# СРАВНЕНИЕ КУРСОВ РАЙФФАЙЗЕНА
+# =====================================
+
+def compare_raif_rates(current, previous):
+
+    changes = []
+
+    if not previous:
+        print("Предыдущие курсы Райффайзена отсутствуют.")
+        return changes
+
+    for currency in ("USD", "EUR"):
+
+        if currency not in previous:
+            continue
+
+        for operation in ("buy", "sell"):
+
+            old_value = previous[currency].get(operation)
+            new_value = current[currency].get(operation)
+
+            if old_value is None or new_value is None:
+                continue
+
+            old_value = float(old_value)
+            new_value = float(new_value)
+
+            if round(old_value, 2) != round(new_value, 2):
+
+                changes.append({
+                    "currency": currency,
+                    "operation": operation,
+                    "old": old_value,
+                    "new": new_value
+                })
+
+                print(
+                    f"ИЗМЕНЕНИЕ RAIFFEISEN {currency} "
+                    f"{operation}: "
+                    f"{format_rate(old_value)} -> "
+                    f"{format_rate(new_value)}"
+                )
+
+    return changes
+
+
+# =====================================
+# СРАВНЕНИЕ РАЗНИЦЫ БАНКОВ
 # =====================================
 
 def has_spread_changed(current, previous):
@@ -629,6 +674,49 @@ def has_spread_changed(current, previous):
             return True
 
     return False
+
+
+# =====================================
+# СООБЩЕНИЕ ОБ ИЗМЕНЕНИИ RAIFFEISEN
+# =====================================
+
+def format_raif_changes(changes):
+
+    if not changes:
+        return ""
+
+    operation_names = {
+        "buy": "Покупка",
+        "sell": "Продажа"
+    }
+
+    lines = [
+        "🏦 <b>ИЗМЕНИЛСЯ КУРС RAIFFEISEN</b>",
+        ""
+    ]
+
+    for change in changes:
+
+        currency = change["currency"]
+        operation = operation_names[change["operation"]]
+
+        old_value = change["old"]
+        new_value = change["new"]
+
+        difference = round(
+            new_value - old_value,
+            2
+        )
+
+        lines.extend([
+            f"💱 {currency} / UAH — {operation}",
+            f"Было: {format_rate(old_value)}",
+            f"Стало: <b>{format_rate(new_value)}</b>",
+            f"Изменение: {format_difference(difference)} грн",
+            ""
+        ])
+
+    return "\n".join(lines)
 
 
 # =====================================
@@ -688,17 +776,26 @@ def main():
 
     state = load_state()
 
-    # Получаем команды Telegram.
+    # Обрабатываем команды Telegram.
     process_telegram_commands(state)
 
-    # Получаем свежие курсы.
+    # Сохраняем предыдущие курсы ДО получения новых.
+    previous_raif = state.get("raif")
+    previous_spreads = state.get("spreads")
+
+    first_run = not state.get(
+        "comparison_initialized",
+        False
+    )
+
+    # Получаем актуальные курсы.
     raif = fetch_raif_rates()
 
     xchange_data = fetch_xchange_rates()
 
     xchange = xchange_data["rates"]
 
-    # Считаем разницу.
+    # Считаем новую разницу.
     spreads = calculate_spreads(
         raif,
         xchange
@@ -712,43 +809,58 @@ def main():
     print("РАЗНИЦА:", spreads)
     print("===================================")
 
-    previous_spreads = state.get("spreads")
-
-    first_run = not state.get(
-        "comparison_initialized",
-        False
+    # ПЕРВОЕ СРАВНЕНИЕ:
+    # Изменение каждого курса Райффайзена.
+    raif_changes = compare_raif_rates(
+        raif,
+        previous_raif
     )
 
-    changed = has_spread_changed(
+    # ВТОРОЕ СРАВНЕНИЕ:
+    # Изменение разницы между банками.
+    spread_changed = has_spread_changed(
         spreads,
         previous_spreads
     )
 
-    # Отправляем уведомление.
-    if first_run or changed:
+    # Формируем уведомление.
+    notification_parts = []
 
-        message = format_comparison(
+    if first_run:
+
+        notification_parts.append(
+            "✅ МОНИТОРИНГ ЗАПУЩЕН"
+        )
+
+    else:
+
+        if raif_changes:
+
+            notification_parts.append(
+                format_raif_changes(raif_changes)
+            )
+
+        if spread_changed:
+
+            notification_parts.append(
+                "🔔 <b>ИЗМЕНИЛАСЬ РАЗНИЦА КУРСОВ</b>"
+            )
+
+    # Отправляем уведомление, если сработало
+    # хотя бы одно из двух независимых сравнений.
+    if first_run or raif_changes or spread_changed:
+
+        message = "\n\n".join(
+            part for part in notification_parts if part
+        )
+
+        message += "\n\n" + format_comparison(
             raif,
             xchange,
             xchange_data,
             spreads
         )
 
-        if first_run:
-
-            message = (
-                "✅ МОНИТОРИНГ ЗАПУЩЕН\n\n"
-                + message
-            )
-
-        else:
-
-            message = (
-                "🔔 ИЗМЕНИЛАСЬ РАЗНИЦА КУРСОВ\n\n"
-                + message
-            )
-
-        # Сначала отправка, затем сохранение состояния.
         telegram_send(message)
 
         print("Уведомление успешно отправлено.")
@@ -756,11 +868,12 @@ def main():
     else:
 
         print(
-            "Разница курсов не изменилась. "
-            "Уведомление не требуется."
+            "Курсы Райффайзена и разница банков "
+            "не изменились. Уведомление не требуется."
         )
 
-    # Сохраняем актуальные данные.
+    # Сохраняем новые значения только после
+    # успешной отправки уведомления.
     state["comparison_initialized"] = True
 
     state["raif"] = raif
@@ -803,3 +916,4 @@ if __name__ == "__main__":
         )
 
         raise
+                
