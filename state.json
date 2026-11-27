@@ -1,14 +1,14 @@
 {
   "initialized": true,
-  "last_channel_id": 76225,
+  "last_channel_id": 76229,
   "raif": {
     "USD": {
-      "buy": 44.9,
-      "sell": 45.42
+      "buy": 44.85,
+      "sell": 45.35
     },
     "EUR": {
       "buy": 49.1,
-      "sell": 49.8
+      "sell": 49.75
     }
   },
   "comparison_initialized": true,
@@ -18,16 +18,16 @@
       "sell": 45.35
     },
     "EUR": {
-      "buy": 49.8,
-      "sell": 50.0
+      "buy": 49.75,
+      "sell": 49.95
     }
   },
-  "xchange_post_id": 76225,
+  "xchange_post_id": 76229,
   "xchange_post_date": "",
   "spreads": {
-    "USD": -0.27,
+    "USD": -0.2,
     "EUR": 0.0
   },
-  "telegram_update_offset": 249693349,
+  "telegram_update_offset": 249693350,
   "telegram_test_sent": true
 }
