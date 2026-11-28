@@ -1,6 +1,6 @@
 {
   "initialized": true,
-  "last_channel_id": 76320,
+  "last_channel_id": 76326,
   "raif": {
     "USD": {
       "buy": 44.85,
@@ -22,7 +22,7 @@
       "sell": 49.9
     }
   },
-  "xchange_post_id": 76320,
+  "xchange_post_id": 76326,
   "xchange_post_date": "",
   "spreads": {
     "USD": -0.2,
